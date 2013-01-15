@@ -15,7 +15,11 @@ var WebSocket = require('../')
   , program = require('commander')
   , util = require('util')
   , events = require('events')
-  , readline = require('readline');
+  , readline = require('readline')
+  , http = require('http')
+  , https = require('https')
+  , url = require('url')
+  , tls = require('tls');
 
 /**
  * InputReader - processes console input
@@ -84,6 +88,15 @@ program
   .option('-c, --connect <url>', 'connect to a websocket server')
   .option('-p, --protocol <version>', 'optional protocol version')
   .option('-o, --origin <origin>', 'optional origin')
+  .option('--path <path>', 'HTTP path to listen on')
+  .option('--host <host>', 'listen on host')
+  .option('--cert <cert>', 'certificate')
+  .option('--key <key>', 'private key')
+  .option('--ca <ca>', 'trusted certificate(s)')
+  .option('--cipher <cipher>', 'allowed SSL/TLS ciphers')
+  .option('--honor-cipher-order', 'honor cipher list order')
+  .option('--request-client-cert', 'request client certificate')
+  .option('--reject-unverified', 'reject unverified peers')
   .parse(process.argv);
 
 if (program.listen && program.connect) {
@@ -97,10 +110,36 @@ else if (program.listen) {
   if (program.protocol) options.protocolVersion = program.protocol;
   if (program.origin) options.origin = program.origin;
   var ws = null;
-  var wss = new WebSocket.Server({port: program.listen}, function() {
+  var htt;
+  var httListenCb = function() {
     wsConsole.print('listening on port ' + program.listen + ' (press CTRL+C to quit)', Console.Colors.Green);
     wsConsole.clear();
-  });
+  };
+  if (program.cert || program.key) {
+    if (!program.cert || !program.key) {
+      wsConsole.print('error: you must specify both --cert and --key');
+      process.exit(-1);
+    }
+    var httOpts = {
+      key: fs.readFileSync(program.key),
+      cert: fs.readFileSync(program.cert)
+    };
+    if (program.ca) httOpts.ca = [fs.readFileSync(program.ca)];
+    if (program.cipher) httOpts.cipher = program.cipher;
+    if (program.honorCipherOrder) httOpts.honorCipherOrder = true;
+    if (program.requestClientCert) httOpts.requestCert = program.requestClientCert;
+    if (program.rejectUnverified) httOpts.rejectUnauthorized = true;
+    httOpts.agent = new https.Agent(httOpts);
+    htt = https.createServer(httOpts);
+  }
+  else {
+    htt = http.createServer();
+  }
+  wssOpts = {server: htt};
+  if (program.path) wssOpts.path = program.path;
+  var wss = new WebSocket.Server(wssOpts);
+  if (program.host) htt.listen(program.listen, options.host, httListenCb);
+  else htt.listen(program.listen, httListenCb);
   wsConsole.on('close', function() {
     if (ws) {
       try {
@@ -149,6 +188,26 @@ else if (program.connect) {
   var options = {};
   if (program.protocol) options.protocolVersion = program.protocol;
   if (program.origin) options.origin = program.origin;
+  var cUrl = url.parse(program.connect);
+  var sock;
+  if (program.cert || program.key) {
+    if (!program.cert || !program.key) {
+      wsConsole.print('error: you must specify both --cert and --key');
+      process.exit(-1);
+    }
+    sockOpts = {
+      key: fs.readFileSync(program.key),
+      cert: fs.readFileSync(program.cert)
+    };
+    if (program.ca) sockOpts.ca = [fs.readFileSync(program.ca)];
+    if (program.cipher) sockOpts.cipher = program.cipher;
+    if (program.rejectUnverified) sockOpts.rejectUnauthorized = true;
+    sock = tls.connect(cUrl.port, cUrl.hostname, sockOpts);
+  }
+  else {
+    sock = net.connect(cUrl.port, cUrl.hostname);
+  }
+  options.socket = sock;
   var ws = new WebSocket(program.connect, options);
   ws.on('open', function() {
     wsConsole.print('connected (press CTRL+C to quit)', Console.Colors.Green);
